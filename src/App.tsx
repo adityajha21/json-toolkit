@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import Editor, { type OnMount } from "@monaco-editor/react";
 import clsx from "clsx";
 
-type Tool = "compare" | "viewer" | "xml" | "validator";
+type Tool = "formatter" | "compare" | "viewer" | "xml" | "validator" | "class-to-json" | "update-data";
 
 const escapeHtml = (value: string) =>
   value
@@ -88,15 +88,16 @@ const countKeys = (obj: any): number => {
 };
 
 function App() {
-  const [activeTool, setActiveTool] = useState<Tool>("compare");
-  const [compareMode, setCompareMode] = useState<"line" | "structure">("line");
+  const [activeTool, setActiveTool] = useState<Tool>("formatter");
+  const [compareMode] = useState<"line" | "structure">("line");
   const [dark, setDark] = useState(true);
-  const [input, setInput] = useState('{"name":"Aditya"}');
+  const [input, setInput] = useState('{\n  "name": "John Doe",\n  "email": "john@example.com"\n}');
   const [compareLeft, setCompareLeft] = useState('{"a":1}');
-  const [compareRight, setCompareRight] = useState('{"a":2}');
+  const [compareRight] = useState('{"a":2}');
   const [output, setOutput] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
+  const [classInput, setClassInput] = useState("");
 
   const editorRef = useRef<any>(null);
   const monacoRef = useRef<any>(null);
@@ -144,10 +145,34 @@ function App() {
     setMarkers(input);
   };
 
+  const runFormat = () => {
+    try {
+      const parsed = JSON.parse(input);
+      const formatted = JSON.stringify(parsed, null, 2);
+      setInput(formatted);
+      setOutput(formatted);
+      setError(null);
+    } catch (e: any) {
+      setOutput("");
+      setError(e.message);
+    }
+    setMarkers(input);
+  };
+
+  const downloadOutput = () => {
+    const content = output || input;
+    const data = new Blob([content], { type: "application/json" });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(data);
+    link.download = "json-toolkit-output.json";
+    link.click();
+    URL.revokeObjectURL(link.href);
+  };
+
   const runValidate = () => {
     try {
       JSON.parse(input);
-      setOutput("Valid JSON");
+      setOutput("✓ Valid JSON");
       setError(null);
     } catch (e: any) {
       setOutput("");
@@ -178,16 +203,41 @@ function App() {
     reader.readAsText(file);
   };
 
+  const classToJson = (classCode: string): string => {
+    try {
+      const propertyRegex = /(?:public|private|protected)?\s+(?:readonly\s+)?(\w+):\s*([^;]+);/g;
+      const properties: { [key: string]: any } = {};
+      
+      let match;
+      while ((match = propertyRegex.exec(classCode)) !== null) {
+        const [, propName, propType] = match;
+        let defaultValue: any;
+        
+        if (propType.includes('string') || propType.includes('String')) {
+          defaultValue = "test_string";
+        } else if (propType.includes('number') || propType.includes('Number')) {
+          defaultValue = 123;
+        } else if (propType.includes('boolean') || propType.includes('Boolean')) {
+          defaultValue = true;
+        } else if (propType.includes('Date')) {
+          defaultValue = new Date().toISOString();
+        } else if (propType.includes('[]') || propType.includes('Array')) {
+          defaultValue = [];
+        } else {
+          defaultValue = null;
+        }
+        
+        properties[propName] = defaultValue;
+      }
+      
+      return JSON.stringify(properties, null, 2);
+    } catch (e) {
+      return '{"error": "Invalid class syntax"}';
+    }
+  };
+
   const getStructureDiff = (left: any, right: any): string => {
     const lines: string[] = [];
-    const walk = (o: any, p: string[] = []) => {
-      if (o === null || typeof o !== "object") return;
-      if (Array.isArray(o)) {
-        o.forEach((v, i) => walk(v, [...p, `[${i}]`]));
-        return;
-      }
-      Object.keys(o).forEach((key) => walk(o[key], [...p, key]));
-    };
 
     const compare = (a: any, b: any, p: string[] = []) => {
       if (a === b) return;
@@ -217,7 +267,7 @@ function App() {
     };
 
     compare(left, right);
-    return lines.length ? lines.join("\n") : "No structural differences";
+    return lines.length ? lines.join("\n") : "No differences";
   };
 
   const copyAllOutput = () => {
@@ -231,7 +281,7 @@ function App() {
           const b = JSON.parse(compareRight);
           text = getStructureDiff(a, b);
         } catch {
-          text = "Invalid JSON for structure compare";
+          text = "Invalid JSON";
         }
       }
     }
@@ -239,7 +289,6 @@ function App() {
   };
 
   useEffect(() => {
-    // keep output synced with input if not compare/viewer.
     if (activeTool === "xml") {
       runXml();
       return;
@@ -259,13 +308,23 @@ function App() {
     if (activeTool === "validator") {
       try {
         JSON.parse(input);
-        setOutput("Valid JSON");
+        setOutput("✓ Valid JSON");
         setError(null);
       } catch (e: any) {
         setOutput("");
         setError(e.message);
       }
       setMarkers(input);
+      return;
+    }
+    if (activeTool === "class-to-json") {
+      setOutput("");
+      setError(null);
+      return;
+    }
+    if (activeTool === "update-data") {
+      setOutput("");
+      setError(null);
       return;
     }
     setMarkers(input);
@@ -276,10 +335,7 @@ function App() {
       if (e.ctrlKey || e.metaKey) {
         if (e.key === "Enter") {
           e.preventDefault();
-          runMinify();
-        } else if (e.key === "m") {
-          e.preventDefault();
-          runMinify();
+          runFormat();
         }
       }
     };
@@ -323,334 +379,219 @@ function App() {
     }
   }, [input]);
 
-  // ONLY UI CHANGES — LOGIC SAME
-
-return (
-  <div className={clsx("min-h-screen", dark ? "bg-[#0f172a] text-slate-100" : "bg-slate-100 text-slate-900")}>
-
-    {/* HEADER */}
-    <header className="sticky top-0 z-50 border-b border-slate-800 bg-slate-950 text-white">
-      <div className="flex flex-col gap-2 px-6 py-2">
-        <div className="flex items-center justify-between">
-          <h1 className="text-lg font-semibold">JSON Toolkit</h1>
-          <div className="flex items-center gap-2 text-xs">
-            <button
-              onClick={() => setDark((d) => !d)}
-              className="rounded border border-slate-700 px-2 py-1"
-            >
-              {dark ? "Light" : "Dark"}
-            </button>
-            <a href="https://github.com" target="_blank" rel="noreferrer" className="rounded border border-slate-700 px-2 py-1">
-              GitHub
-            </a>
+  return (
+    <div className={clsx("flex flex-col h-screen", dark ? "bg-slate-950 text-slate-100" : "bg-white text-slate-900")}>
+      {/* HEADER */}
+      <header className={clsx("border-b px-4 py-3", dark ? "border-slate-800 bg-slate-950/80" : "border-slate-200 bg-white/80")}>
+        <div className="max-w-7xl mx-auto">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <div className="text-2xl font-bold">{"{}"}</div>
+              <div>
+                <h1 className="font-bold text-lg">JSON Toolkit</h1>
+                <p className={clsx("text-xs", dark ? "text-slate-500" : "text-slate-500")}>Free online JSON tools</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <button onClick={() => setDark(!dark)} className={clsx("px-3 py-1 rounded text-sm", dark ? "bg-slate-800 hover:bg-slate-700" : "bg-slate-100 hover:bg-slate-200")}>
+                {dark ? "☀️" : "🌙"}
+              </button>
+              <a href="https://github.com" target="_blank" rel="noreferrer" className="text-slate-500 hover:text-slate-300">
+                GitHub
+              </a>
+            </div>
           </div>
+
+          <nav className="flex gap-2 overflow-x-auto pb-1 -mx-4 px-4">
+            {[
+              { key: "formatter", label: "Formatter" },
+              { key: "validator", label: "Validator" },
+              { key: "compare", label: "Compare" },
+              { key: "viewer", label: "Viewer" },
+              { key: "xml", label: "XML" },
+              { key: "class-to-json", label: "Class to JSON" },
+              { key: "update-data", label: "Update Data" },
+            ].map((tool) => (
+              <button
+                key={tool.key}
+                onClick={() => setActiveTool(tool.key as Tool)}
+                className={clsx(
+                  "px-3 py-1 rounded text-sm font-medium whitespace-nowrap",
+                  activeTool === tool.key
+                    ? "bg-indigo-500 text-white"
+                    : clsx(dark ? "text-slate-400 hover:text-slate-200" : "text-slate-600 hover:text-slate-900")
+                )}
+              >
+                {tool.label}
+              </button>
+            ))}
+          </nav>
         </div>
+      </header>
 
-        <div className="flex flex-wrap items-center gap-2 text-xs">
-          {[
-            { key: "compare", label: "Compare" },
-            { key: "viewer", label: "Viewer" },
-            { key: "validator", label: "Validator" },
-            { key: "xml", label: "Convert XML" },
-          ].map((tool) => (
-            <button
-              key={tool.key}
-              onClick={() => setActiveTool(tool.key as Tool)}
-              className={clsx(
-                "px-2 py-1 rounded-md transition",
-                activeTool === tool.key
-                  ? "bg-indigo-500 text-white"
-                  : "text-slate-300 hover:bg-slate-800 hover:text-white"
-              )}
-            >
-              {tool.label}
-            </button>
-          ))}
-
-          <button
-            onClick={runMinify}
-            className="rounded-md bg-indigo-500 px-2 py-1 text-white hover:bg-indigo-600"
-          >
+      {/* TOOLBAR */}
+      <div className={clsx("border-b px-4 py-2", dark ? "border-slate-800 bg-slate-950/50" : "border-slate-200 bg-slate-50")}>
+        <div className="max-w-7xl mx-auto flex gap-2 items-center flex-wrap">
+          <button onClick={runFormat} className="px-3 py-1 rounded text-sm bg-indigo-500 text-white hover:bg-indigo-600 font-medium">
+            Format
+          </button>
+          <button onClick={runMinify} className="px-3 py-1 rounded text-sm bg-indigo-500 text-white hover:bg-indigo-600 font-medium">
             Minify
           </button>
-          <button
-            onClick={runValidate}
-            className="rounded-md bg-indigo-500 px-2 py-1 text-white hover:bg-indigo-600"
-          >
+          <button onClick={runValidate} className={clsx("px-3 py-1 rounded text-sm font-medium", dark ? "bg-slate-800 text-slate-100 hover:bg-slate-700" : "bg-slate-200 text-slate-900 hover:bg-slate-300")}>
             Validate
           </button>
-          <label className="cursor-pointer rounded-md bg-slate-700 px-2 py-1 text-white hover:bg-slate-600">
+          <button onClick={copyAllOutput} className={clsx("px-3 py-1 rounded text-sm font-medium", dark ? "bg-slate-800 text-slate-100 hover:bg-slate-700" : "bg-slate-200 text-slate-900 hover:bg-slate-300")}>
+            Copy
+          </button>
+          <button onClick={downloadOutput} className={clsx("px-3 py-1 rounded text-sm font-medium", dark ? "bg-slate-800 text-slate-100 hover:bg-slate-700" : "bg-slate-200 text-slate-900 hover:bg-slate-300")}>
+            Download
+          </button>
+          <label className={clsx("px-3 py-1 rounded text-sm font-medium cursor-pointer", dark ? "bg-slate-800 text-slate-100 hover:bg-slate-700" : "bg-slate-200 text-slate-900 hover:bg-slate-300")}>
             Upload
-            <input
-              type="file"
-              className="hidden"
-              onChange={(e) => e.target.files?.[0] && onUpload(e.target.files[0])}
-            />
+            <input type="file" className="hidden" onChange={(e) => e.target.files?.[0] && onUpload(e.target.files[0])} />
           </label>
-          {activeTool === "xml" && (
-            <button
-              onClick={() => {
-                try {
-                  const data = jsonToXml(JSON.parse(input));
-                  const blob = new Blob([data], { type: "application/xml" });
-                  const link = document.createElement("a");
-                  link.href = URL.createObjectURL(blob);
-                  link.download = "output.xml";
-                  link.click();
-                  URL.revokeObjectURL(link.href);
-                } catch (e: any) {
-                  setError(e.message);
-                }
-              }}
-              className="rounded-md bg-green-500 px-2 py-1 text-white hover:bg-green-600"
-            >
-              Download XML
-            </button>
-          )}
 
-          <div className="ml-auto flex gap-3 text-xs text-slate-400">
+          <div className="ml-auto flex gap-4 text-xs text-slate-500">
             <span>{stats.size} bytes</span>
             <span>{stats.lines} lines</span>
             <span>{stats.keys} keys</span>
           </div>
         </div>
       </div>
-    </header>
 
-    {/* MAIN */}
-    <main className="max-w-[calc(100%-2rem)] mx-auto px-0 py-3">
+      {/* ERROR */}
+      {error && (
+        <div className="px-4 py-2 bg-red-500/10 border-b border-red-500/50 text-red-400 text-sm">
+          {error}
+        </div>
+      )}
 
-      {/* EDITOR */}
-      {activeTool === "compare" ? (
-        <>
-          <div className="mb-4 grid grid-cols-1 gap-2 md:grid-cols-2">
-            <div className="rounded-xl overflow-hidden border bg-slate-950">
-              <div className="flex items-center justify-between border-b border-slate-700 bg-slate-900 px-2 py-1 text-xs font-semibold">
-                <span>Left JSON</span>
-                <button
-                  onClick={() => navigator.clipboard.writeText(compareLeft)}
-                  className="rounded bg-slate-700 px-2 py-0.5 text-[10px]"
-                >
-                  Copy
-                </button>
-              </div>
+      {/* MAIN CONTENT */}
+      <div className="flex-1 overflow-hidden flex max-w-7xl w-full mx-auto px-4 py-3 gap-3">
+        {/* LEFT PANE */}
+        <div className={clsx("flex-1 rounded-lg border overflow-hidden flex flex-col", dark ? "border-slate-800 bg-slate-950/50" : "border-slate-200 bg-slate-50")}>
+          <div className={clsx("px-4 py-2 border-b text-sm font-semibold", dark ? "border-slate-800 bg-slate-900/50" : "border-slate-200 bg-slate-100")}>
+            {activeTool === "compare" ? "Left JSON" : activeTool === "class-to-json" ? "Class Input" : "JSON Input"}
+          </div>
+          <div className="flex-1 overflow-hidden">
+            {activeTool === "compare" ? (
               <Editor
-                height="360px"
+                height="100%"
                 defaultLanguage="json"
                 theme={dark ? "vs-dark" : "light"}
                 value={compareLeft}
                 onMount={onEditorMount}
                 onChange={(value) => {
-                  const v = value ?? "";
-                  setCompareLeft(v);
-                  setMarkers(v);
+                  setCompareLeft(value ?? "");
+                  setMarkers(value ?? "");
                 }}
-                options={{
-                  minimap: { enabled: false },
-                  wordWrap: "on",
-                  fontSize: 13,
-                  automaticLayout: true,
-                }}
+                options={{ minimap: { enabled: false }, wordWrap: "on", fontSize: 12, automaticLayout: true }}
               />
-            </div>
-            <div className="rounded-xl overflow-hidden border bg-slate-950">
-              <div className="flex items-center justify-between border-b border-slate-700 bg-slate-900 px-2 py-1 text-xs font-semibold">
-                <span>Right JSON</span>
-                <button
-                  onClick={() => navigator.clipboard.writeText(compareRight)}
-                  className="rounded bg-slate-700 px-2 py-0.5 text-[10px]"
-                >
-                  Copy
-                </button>
-              </div>
+            ) : activeTool === "class-to-json" ? (
+              <textarea
+                value={classInput}
+                onChange={(e) => setClassInput(e.target.value)}
+                placeholder="public class User {
+  public name: string;
+  public age: number;
+}"
+                className={clsx("w-full h-full p-4 font-mono text-sm outline-none", dark ? "bg-transparent text-slate-100" : "bg-transparent text-slate-900")}
+              />
+            ) : (
               <Editor
-                height="360px"
+                height="100%"
                 defaultLanguage="json"
                 theme={dark ? "vs-dark" : "light"}
-                value={compareRight}
-                onChange={(v) => setCompareRight(v ?? "")}
-                options={{ minimap: { enabled: false }, wordWrap: "on", fontSize: 13, automaticLayout: true }}
+                value={input}
+                onMount={onEditorMount}
+                onChange={(value) => {
+                  setInput(value ?? "");
+                  setMarkers(value ?? "");
+                }}
+                options={{ minimap: { enabled: false }, wordWrap: "on", fontSize: 12, automaticLayout: true }}
               />
-            </div>
+            )}
           </div>
-          <div className="mb-3 flex items-center gap-2 text-xs">
-          <span>Compare mode:</span>
-          <button
-            onClick={() => setCompareMode("line")}
-            className={clsx(
-              "rounded px-2 py-1",
-              compareMode === "line" ? "bg-indigo-500 text-white" : "bg-slate-700 text-slate-100"
-            )}
-          >
-            Line
-          </button>
-          <button
-            onClick={() => setCompareMode("structure")}
-            className={clsx(
-              "rounded px-2 py-1",
-              compareMode === "structure" ? "bg-indigo-500 text-white" : "bg-slate-700 text-slate-100"
-            )}
-          >
-            Structure
-          </button>
         </div>
-        </>
-      ) : (
-        <div className="mb-4 rounded-xl overflow-hidden border bg-slate-950">
-          <Editor
-            height="420px"
-            defaultLanguage="json"
-            theme={dark ? "vs-dark" : "light"}
-            value={input}
-            onMount={onEditorMount}
-            onChange={(value) => {
-              const v = value ?? "";
-              setInput(v);
-              setMarkers(v);
-            }}
-            options={{
-              minimap: { enabled: false },
-              wordWrap: "on",
-              fontSize: 13,
-              automaticLayout: true,
-            }}
-          />
-        </div>
-      )}
 
-      {/* ERROR */}
-      {error && (
-        <div className="mb-4 border border-red-500 bg-red-500/10 text-red-400 p-2 rounded-md">
-          {error}
-        </div>
-      )}
-
-      {/* OUTPUT */}
-      <div className={clsx(
-        "rounded-xl border p-4 shadow-md",
-        dark
-          ? "bg-slate-900 text-slate-100 border-slate-700"
-          : "bg-white text-slate-900 border-slate-300"
-      )}>
-
-        {/* OUTPUT HEADER */}
-        <div className="flex justify-between items-center mb-3">
-          <h2 className="text-sm font-semibold">Output</h2>
-          <div className="flex items-center gap-2">
+        {/* RIGHT PANE */}
+        <div className={clsx("flex-1 rounded-lg border overflow-hidden flex flex-col", dark ? "border-slate-800 bg-slate-950/50" : "border-slate-200 bg-slate-50")}>
+          <div className={clsx("px-4 py-2 border-b text-sm font-semibold flex items-center justify-between", dark ? "border-slate-800 bg-slate-900/50" : "border-slate-200 bg-slate-100")}>
+            <span>{activeTool === "compare" ? "Right JSON" : "Formatted Output"}</span>
             <input
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               placeholder="Search..."
-              className="text-xs px-2 py-1 rounded bg-slate-800 border border-slate-600"
+              className={clsx("px-2 py-1 rounded text-xs outline-none", dark ? "bg-slate-800 border-0 text-slate-100" : "bg-white border border-slate-300")}
             />
-            <button
-              onClick={copyAllOutput}
-              className="rounded bg-slate-700 px-2 py-1 text-xs"
-            >
-              Copy All Output
-            </button>
           </div>
-        </div>
-
-        {/* OUTPUT BODY */}
-        <div className="max-h-[400px] overflow-auto text-sm font-mono">
-          {activeTool === "viewer" && parsedTree ? (
-            <JsonTree data={parsedTree} search={searchTerm} />
-          ) : activeTool === "compare" ? (
-            compareMode === "line" ? (
-              <div className="grid grid-cols-2 gap-2 text-xs">
-                {["Left", "Right"].map((side, i) => (
-                  <div key={side} className="bg-slate-800 p-2 rounded">
-                    <strong className="text-indigo-400">{side}</strong>
+          <div className={clsx("flex-1 overflow-auto p-4 font-mono text-sm", dark ? "bg-slate-950/30" : "bg-slate-50")}>
+            {activeTool === "viewer" && parsedTree ? (
+              <JsonTree data={parsedTree} search={searchTerm} />
+            ) : activeTool === "compare" ? (
+              compareMode === "line" ? (
+                <div className="grid grid-cols-1 gap-4">
+                  <div>
+                    <strong className="text-indigo-400">Left</strong>
                     {diffRows.map((row, idx) => (
                       <div
                         key={idx}
-                        className={clsx(
-                          "whitespace-pre-wrap",
-                          row.state === "added" && "bg-emerald-600/25 text-emerald-100",
-                          row.state === "removed" && "bg-rose-600/25 text-rose-100",
-                          row.state === "changed" && "bg-amber-600/25 text-amber-100"
-                        )}
+                        className={clsx("whitespace-pre-wrap text-xs p-1 rounded", row.state === "added" && "bg-emerald-600/25", row.state === "removed" && "bg-rose-600/25", row.state === "changed" && "bg-amber-600/25")}
                       >
-                        {i === 0 ? row.left : row.right}
+                        {row.left}
                       </div>
                     ))}
                   </div>
-                ))}
+                  <div>
+                    <strong className="text-indigo-400">Right</strong>
+                    {diffRows.map((row, idx) => (
+                      <div
+                        key={idx}
+                        className={clsx("whitespace-pre-wrap text-xs p-1 rounded", row.state === "added" && "bg-emerald-600/25", row.state === "removed" && "bg-rose-600/25", row.state === "changed" && "bg-amber-600/25")}
+                      >
+                        {row.right}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <pre className="whitespace-pre-wrap text-xs text-slate-300">
+                  {(() => {
+                    try {
+                      return getStructureDiff(JSON.parse(compareLeft), JSON.parse(compareRight));
+                    } catch {
+                      return "Invalid JSON";
+                    }
+                  })()}
+                </pre>
+              )
+            ) : activeTool === "class-to-json" ? (
+              <div>
+                <button onClick={() => {
+                  const result = classToJson(classInput);
+                  setOutput(result);
+                  setError(null);
+                }} className="px-3 py-1 rounded text-sm bg-indigo-500 text-white hover:bg-indigo-600 font-medium mb-3">
+                  Convert to JSON
+                </button>
+                <pre className={clsx("whitespace-pre-wrap text-xs", dark ? "text-slate-100" : "text-slate-900")}>
+                  {output || "Click convert to generate JSON..."}
+                </pre>
               </div>
             ) : (
-              <pre className="whitespace-pre-wrap text-xs">
-                {(() => {
-                  try {
-                    const leftObj = JSON.parse(compareLeft);
-                    const rightObj = JSON.parse(compareRight);
-                    return getStructureDiff(leftObj, rightObj);
-                  } catch (e) {
-                    return "Invalid JSON for structural compare";
-                  }
-                })()}
-              </pre>
-            )
-          ) : (
-            <pre
-              className={clsx("whitespace-pre-wrap", dark ? "text-slate-100" : "text-slate-900")}
-              dangerouslySetInnerHTML={{
-                __html: preparedOutput || "<i>No output</i>",
-              }}
-            />
-          )}
+              <pre className={clsx("whitespace-pre-wrap text-xs", dark ? "text-slate-100" : "text-slate-900")} dangerouslySetInnerHTML={{ __html: preparedOutput || "Output will appear here..." }} />
+            )}
+          </div>
         </div>
       </div>
-    </main>
 
-    {/* FOOTER */}
-    <footer className={clsx(
-      "border-t mt-8 py-6 px-4 text-center text-sm",
-      dark
-        ? "border-slate-700 bg-slate-950 text-slate-400"
-        : "border-slate-200 bg-slate-50 text-slate-600"
-    )}>
-      <h3 className="font-semibold mb-3">Feedback & Contact</h3>
-      <div className="flex flex-col gap-2 justify-center items-center">
-        <p>We'd love to hear from you! Share your feedback to help us improve.</p>
-        <div className="flex gap-4 justify-center flex-wrap">
-          <a
-            href="mailto:feedback@example.com"
-            className={clsx(
-              "hover:underline",
-              dark ? "text-indigo-400 hover:text-indigo-300" : "text-indigo-600 hover:text-indigo-700"
-            )}
-          >
-            📧 Email: aditaya.jha@gmail.com
-          </a>
-          <a
-            href="https://github.com"
-            target="_blank"
-            rel="noopener noreferrer"
-            className={clsx(
-              "hover:underline",
-              dark ? "text-indigo-400 hover:text-indigo-300" : "text-indigo-600 hover:text-indigo-700"
-            )}
-          >
-            🐙 GitHub Issues
-          </a>
-          <a
-            href="https://twitter.com"
-            target="_blank"
-            rel="noopener noreferrer"
-            className={clsx(
-              "hover:underline",
-              dark ? "text-indigo-400 hover:text-indigo-300" : "text-indigo-600 hover:text-indigo-700"
-            )}
-          >
-            𝕏 Twitter
-          </a>
-        </div>
-      </div>
-      <p className="text-xs mt-4 opacity-70">© 2026 JSON Toolkit. All rights reserved.</p>
-    </footer>
-  </div>
-);
+      {/* FOOTER */}
+      <footer className={clsx("border-t px-4 py-2 text-center text-xs", dark ? "border-slate-800 text-slate-500" : "border-slate-200 text-slate-600")}>
+        © 2026 JSON Toolkit | <a href="mailto:feedback@example.com" className="hover:underline">Feedback</a>
+      </footer>
+    </div>
+  );
 }
 
 export default App;
